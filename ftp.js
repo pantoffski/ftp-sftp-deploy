@@ -7,10 +7,33 @@ const FTP = function () {
   const noConnectionResponse = {
     err: "No FTP connection available",
   };
+  let testFnName = Math.random().toString(36).replace("0.", "_");
   let conn,
     logger = () => {},
     localBasePath = "/",
     remoteBasePath = "/";
+  function processOpts(v) {
+    let o = { include: [], exclude: [] };
+    if ("include" in v) {
+      let tmp = Array.isArray(v.include) ? v.include : [v.include];
+      o.include = tmp.map((vv) =>
+        vv.constructor.name == "RegExp" ? vv : new RegExp(vv, "gi")
+      );
+    }
+    if ("exclude" in v) {
+      let tmp = Array.isArray(v.exclude) ? v.exclude : [v.exclude];
+      o.exclude = tmp.map((vv) =>
+        vv.constructor.name == "RegExp" ? vv : new RegExp(vv, "gi")
+      );
+    }
+    o[testFnName] = (url) => {
+      var ret = o.include.length ? false : true;
+      o.include.forEach((reg) => (ret |= reg.test(url)));
+      o.exclude.forEach((reg) => (ret &= !reg.test(url)));
+      return ret ? true : false;
+    };
+    return o;
+  }
   function formatStat(v) {
     return {
       type: v.type ? "d" : "-",
@@ -26,8 +49,9 @@ const FTP = function () {
       group: v.group,
     };
   }
-  async function delDir(destPath) {
+  async function delDir(destPath, opts = { include: [], exclude: [] }) {
     if (!conn) return noConnectionResponse;
+    opts = testFnName in opts ? opts : processOpts(opts);
     destPath = destPath.replace(/\/$/, "") || "/";
     let absDestPath = path.join(remoteBasePath, destPath);
     let destStat = await retObj.exists(destPath);
@@ -61,15 +85,23 @@ const FTP = function () {
     for (let i = 0; i < destFiles.length; i++) {
       let childDest = path.join(destPath, destFiles[i].name);
       if (destFiles[i].type == "-") {
-        let delStat = await retObj.del(childDest);
+        let delStat = await retObj.del(childDest, opts);
         if (delStat.err) return delStat;
       } else {
         dirChild.push(childDest);
       }
     }
     for (let i = 0; i < dirChild.length; i++) {
-      let delStat = await delDir(dirChild[i]);
+      let delStat = await delDir(dirChild[i], opts);
       if (delStat.err) return delStat;
+    }
+    if (!opts[testFnName](absDestPath)) {
+      logger({
+        method: "del",
+        res: { dest: destPath, res: `skip del ${absDestPath} .` },
+        err: null,
+      });
+      return { res: `skip del ${absDestPath} .`, err: null };
     }
     res = await new Promise((resolve) => {
       conn.raw("rmd", absDestPath, (e) => {
@@ -84,8 +116,13 @@ const FTP = function () {
     });
     return res;
   }
-  async function putDir(srcPath, destPath) {
+  async function putDir(
+    srcPath,
+    destPath,
+    opts = { include: [], exclude: [] }
+  ) {
     if (!conn) return noConnectionResponse;
+    opts = testFnName in opts ? opts : processOpts(opts);
     srcPath = srcPath.replace(/\/$/, "") || "/";
     destPath = destPath.replace(/\/$/, "") || "/";
     let absSrcPath = path.join(localBasePath, srcPath);
@@ -105,6 +142,18 @@ const FTP = function () {
         err: `${absSrcPath} is not a directory.`,
       });
       return { err: `${absSrcPath} is not a directory.` };
+    }
+    if (!opts[testFnName](absSrcPath)) {
+      logger({
+        method: "put",
+        res: {
+          src: srcPath,
+          dest: destPath,
+          res: `skip put ${absSrcPath} .`,
+        },
+        err: null,
+      });
+      return { res: `skip put ${absSrcPath} .`, err: null };
     }
     let destStat = await retObj.exists(destPath);
     if (destStat.err) {
@@ -145,12 +194,16 @@ const FTP = function () {
           dest: childDest,
         });
       if (childStat.isFile) {
-        let childPutStat = await retObj.put(childSrc, childDest);
+        let childPutStat = await retObj.put(childSrc, childDest, opts);
         if (childPutStat.err) return childPutStat;
       }
     }
     for (let i = 0; i < dirChild.length; i++) {
-      let childDirPutStat = await putDir(dirChild[i].src, dirChild[i].dest);
+      let childDirPutStat = await putDir(
+        dirChild[i].src,
+        dirChild[i].dest,
+        opts
+      );
       if (childDirPutStat.err) return childDirPutStat;
     }
     logger({
@@ -160,11 +213,29 @@ const FTP = function () {
     });
     return { err: null };
   }
-  async function getDir(remotePath, localPath) {
+  async function getDir(
+    remotePath,
+    localPath,
+    opts = { include: [], exclude: [] }
+  ) {
     if (!conn) return noConnectionResponse;
+    opts = testFnName in opts ? opts : processOpts(opts);
     localPath = localPath.replace(/\/$/, "") || "/";
     remotePath = remotePath.replace(/\/$/, "") || "/";
-    let absLocalPath = path.join(localBasePath, localPath);
+    let absLocalPath = path.join(localBasePath, localPath),
+      absRemotePath = path.join(remoteBasePath, remotePath);
+    if (!opts[testFnName](absRemotePath)) {
+      logger({
+        method: "get",
+        res: {
+          remote: remotePath,
+          local: localPath,
+          res: `skip get ${absRemotePath} .`,
+        },
+        err: null,
+      });
+      return { res: `skip get ${absRemotePath} .`, err: null };
+    }
     if (!fs.existsSync(absLocalPath))
       try {
         fs.mkdirSync(absLocalPath, { recursive: true });
@@ -200,14 +271,14 @@ const FTP = function () {
       let childRemote = path.join(remotePath, remoteFiles[i].name),
         childLocal = path.join(localPath, remoteFiles[i].name);
       if (remoteFiles[i].type == "-") {
-        let getStat = await retObj.get(childRemote, childLocal);
+        let getStat = await retObj.get(childRemote, childLocal, opts);
         if (getStat.err) return getStat;
       } else {
         dirChild.push({ remote: childRemote, local: childLocal });
       }
     }
     for (let i = 0; i < dirChild.length; i++) {
-      let getStat = await getDir(dirChild[i].remote, dirChild[i].local);
+      let getStat = await getDir(dirChild[i].remote, dirChild[i].local, opts);
       if (getStat.err) return getStat;
     }
     logger({
@@ -251,8 +322,14 @@ const FTP = function () {
       }
       return res;
     },
-    async chmod(dest, mode, recursive = false) {
+    async chmod(
+      dest,
+      mode,
+      recursive = false,
+      opts = { include: [], exclude: [] }
+    ) {
       if (!conn) return noConnectionResponse;
+      opts = testFnName in opts ? opts : processOpts(opts);
       dest = dest.replace(/\/$/, "") || "/";
       let absDest = path.join(remoteBasePath, dest);
       let destStat = await this.exists(dest);
@@ -264,6 +341,14 @@ const FTP = function () {
           err: destStat.err,
         });
         return destStat;
+      }
+      if (!opts[testFnName](absDest)) {
+        logger({
+          method: "chmod",
+          res: { dest, mode, recursive, res: `skip chmod ${absDest} .` },
+          err: null,
+        });
+        return { res: `skip chmod ${absDest} .`, err: null };
       }
       let res = await new Promise((resolve) => {
         conn.raw("site", "chmod", mode, absDest, (e) => {
@@ -280,18 +365,32 @@ const FTP = function () {
           let childDest = path.join(dest, destFiles[i].name);
           let absChildDest = path.join(remoteBasePath, childDest);
           if (destFiles[i].type == "-") {
-            let chmodStat = await new Promise((resolve) => {
-              conn.raw("site", "chmod", mode, absChildDest, (e) => {
-                if (e) return resolve({ err: e.message });
-                resolve({ err: null });
+            if (!opts[testFnName](absChildDest)) {
+              logger({
+                method: "chmod",
+                res: {
+                  dest,
+                  mode,
+                  recursive,
+                  res: `skip chmod ${absChildDest} .`,
+                },
+                err: null,
               });
-            });
-            logger({
-              method: "chmod",
-              res: { childDest, mode, recursive, res: chmodStat.res },
-              err: chmodStat.err,
-            });
-            if (chmodStat.err) return chmodStat;
+              //return { res: `skip chmod ${absChildDest} .`, err: null };
+            } else {
+              let chmodStat = await new Promise((resolve) => {
+                conn.raw("site", "chmod", mode, absChildDest, (e) => {
+                  if (e) return resolve({ err: e.message });
+                  resolve({ err: null });
+                });
+              });
+              logger({
+                method: "chmod",
+                res: { childDest, mode, recursive, res: chmodStat.res },
+                err: chmodStat.err,
+              });
+              if (chmodStat.err) return chmodStat;
+            }
           } else {
             dirChild.push(childDest);
           }
@@ -308,8 +407,9 @@ const FTP = function () {
       });
       return res;
     },
-    async del(dest) {
+    async del(dest, opts = { include: [], exclude: [] }) {
       if (!conn) return noConnectionResponse;
+      opts = testFnName in opts ? opts : processOpts(opts);
       dest = dest.replace(/\/$/, "") || "/";
       let absDest = path.join(remoteBasePath, dest);
       let destStat = await this.exists(dest);
@@ -321,7 +421,15 @@ const FTP = function () {
         });
         return Object.assign(destStat, { err: `${dest} not found.` });
       }
-      if (destStat.res == "d") return await delDir(dest);
+      if (destStat.res == "d") return await delDir(dest, opts);
+      if (!opts[testFnName](absDest)) {
+        logger({
+          method: "del",
+          res: { dest, res: `skip del ${absDest} .` },
+          err: null,
+        });
+        return { res: `skip del ${absDest} .`, err: null };
+      }
       let res = await new Promise((resolve) => {
         conn.raw("dele", absDest, (e) => {
           if (e) return resolve({ err: e.message });
@@ -336,8 +444,9 @@ const FTP = function () {
       });
       return res;
     },
-    async put(src, dest) {
+    async put(src, dest, opts = { include: [], exclude: [] }) {
       if (!conn) return noConnectionResponse;
+      opts = testFnName in opts ? opts : processOpts(opts);
       src = src.replace(/\/$/, "") || "/";
       dest = dest.replace(/\/$/, "") || "/";
       let absSrc = path.join(localBasePath, src);
@@ -350,7 +459,16 @@ const FTP = function () {
         });
         return { err: `No source file or directory ${absSrc} .` };
       }
-      if (fs.lstatSync(absSrc).isDirectory()) return await putDir(src, dest);
+      if (fs.lstatSync(absSrc).isDirectory())
+        return await putDir(src, dest, opts);
+      if (!opts[testFnName](absSrc)) {
+        logger({
+          method: "put",
+          res: { src, dest, res: `skip put ${absSrc} .` },
+          err: null,
+        });
+        return { res: `skip put ${absSrc} .`, err: null };
+      }
       let destPath = dest.split("/").slice(0, -1).join("/");
       let mkDirRes = await this.mkDir(destPath).catch((e) => {
         return { err: e.message };
@@ -371,14 +489,15 @@ const FTP = function () {
         });
       });
       logger({
-        method: "put",
-        res: { src, dest, res: res.res },
+        method: "putx",
+        res: { src, dest, res: res.res, ex: opts.exclude },
         err: res.err,
       });
       return res;
     },
-    async get(remote, local) {
+    async get(remote, local, opts = { include: [], exclude: [] }) {
       if (!conn) return noConnectionResponse;
+      opts = testFnName in opts ? opts : processOpts(opts);
       remote = remote.replace(/\/$/, "") || "/";
       local = local.replace(/\/$/, "") || "/";
       let absRemote = path.join(remoteBasePath, remote);
@@ -392,7 +511,15 @@ const FTP = function () {
         });
         return Object.assign(destStat, { err: `${absRemote} not found.` });
       }
-      if (destStat.res == "d") return await getDir(remote, local);
+      if (destStat.res == "d") return await getDir(remote, local, opts);
+      if (!opts[testFnName](absRemote)) {
+        logger({
+          method: "get",
+          res: { remote, local, res: `skip get ${absRemote} .` },
+          err: null,
+        });
+        return { res: `skip get ${absRemote} .`, err: null };
+      }
       let res = await new Promise((resolve) => {
         conn.get(absRemote, (e, socket) => {
           if (e) {
