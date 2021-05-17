@@ -1,5 +1,7 @@
 "use strict";
 
+const { timeStamp } = require("console");
+
 const FTP = function () {
   let fs = require("fs");
   let path = require("path");
@@ -17,20 +19,22 @@ const FTP = function () {
     if ("include" in v) {
       let tmp = Array.isArray(v.include) ? v.include : [v.include];
       o.include = tmp.map((vv) =>
-        vv.constructor.name == "RegExp" ? vv : new RegExp(vv, "gi")
+        vv.constructor.name == "RegExp" ? vv : new RegExp(vv, "i")
       );
     }
     if ("exclude" in v) {
       let tmp = Array.isArray(v.exclude) ? v.exclude : [v.exclude];
       o.exclude = tmp.map((vv) =>
-        vv.constructor.name == "RegExp" ? vv : new RegExp(vv, "gi")
+        vv.constructor.name == "RegExp" ? vv : new RegExp(vv, "i")
       );
     }
+    // return true if valid for process
     o[testFnName] = (url) => {
-      var ret = o.include.length ? false : true;
-      o.include.forEach((reg) => (ret |= reg.test(url)));
-      o.exclude.forEach((reg) => (ret &= !reg.test(url)));
-      return ret ? true : false;
+      let ret = o.include.length ? false : true;
+
+      o.include.forEach((reg) => (ret ||= reg.test(url)));
+      o.exclude.forEach((reg) => (ret &&= !reg.test(url)));
+      return ret;
     };
     return o;
   }
@@ -49,61 +53,127 @@ const FTP = function () {
       group: v.group,
     };
   }
+  async function remoteListRecursive(
+    remotePath,
+    opts = { include: [], exclude: [] }
+  ) {
+    if (!conn) return noConnectionResponse;
+    remotePath = remotePath.replace(/\/$/, "") || "/";
+    opts = testFnName in opts ? opts : processOpts(opts);
+    let res = [],
+      absRemotePath = path.join(localBasePath, remotePath);
+
+    let tmp = await retObj.list(remotePath);
+    if (tmp.err) return tmp;
+
+    let remoteFiles = tmp.res,
+      dirChild = [];
+    for (let i = 0; i < remoteFiles.length; i++) {
+      let childRemote = path.join(remotePath, remoteFiles[i].name),
+        childAbsRemote = path.join(localBasePath, childRemote);
+      if (remoteFiles[i].type == "-") {
+        if (opts[testFnName](childAbsRemote))
+          res.push({ type: "-", url: childAbsRemote });
+      } else {
+        dirChild.push(childRemote);
+      }
+    }
+    for (let i = 0; i < dirChild.length; i++) {
+      let childDirRes = await remoteListRecursive(dirChild[i], opts);
+      if (!childDirRes.err && childDirRes.res.length) {
+        res.push({
+          type: "d",
+          url: path.join(localBasePath, dirChild[i]),
+          child: childDirRes.res,
+        });
+      }
+    }
+    return { err: null, res };
+  }
+  async function localListRecursive(
+    localPath,
+    opts = { include: [], exclude: [] }
+  ) {
+    if (!conn) return noConnectionResponse;
+    localPath = localPath.replace(/\/$/, "") || "/";
+    opts = testFnName in opts ? opts : processOpts(opts);
+    let res = [],
+      absLocalPath = path.join(localBasePath, localPath);
+
+    if (!fs.existsSync(absLocalPath))
+      return { err: `No source directory ${absLocalPath} .` };
+
+    if (!fs.lstatSync(absLocalPath).isDirectory())
+      return { err: `${absLocalPath} is not a directory.` };
+
+    let localFiles = fs.readdirSync(absLocalPath),
+      dirChild = [];
+    for (let i = 0; i < localFiles.length; i++) {
+      let childLocal = path.join(localPath, localFiles[i]),
+        childAbsLocal = path.join(localBasePath, childLocal),
+        childStat = fs.lstatSync(childAbsLocal);
+      if (childStat.isDirectory()) dirChild.push(childLocal);
+      if (childStat.isFile) {
+        console.warn("test ", childAbsLocal);
+        if (opts[testFnName](childAbsLocal))
+          res.push({ type: "-", url: childAbsLocal });
+      }
+    }
+    for (let i = 0; i < dirChild.length; i++) {
+      let childDirRes = await localListRecursive(dirChild[i], opts);
+      if (!childDirRes.err && childDirRes.res.length) {
+        res.push({
+          type: "d",
+          url: path.join(localBasePath, dirChild[i]),
+          child: childDirRes.res,
+        });
+      }
+    }
+    return { err: null, res };
+  }
+  async function doDelDir(files) {
+    let errs = [];
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].type == "-") {
+        let res = await new Promise((resolve) => {
+          conn.raw("dele", files[i].url, (e) => {
+            if (e) return resolve({ err: e.message });
+            resolve({ err: null });
+          });
+        });
+        errs.push(res.err);
+        logger({
+          method: "del",
+          res: { dest, res: res.res },
+          err: res.err,
+        });
+      } else {
+        errs = [...errs, ...(await doDelDir(files[i].child))];
+        let res = await new Promise((resolve) => {
+          conn.raw("rmd", files[i].url, (e) => {
+            if (e) return resolve({ err: e.message });
+            resolve({ err: null });
+          });
+        });
+        // errs.push(res.err);
+        logger({
+          method: "del",
+          res: { dest: destPath, res: res.res },
+          err: res.err,
+        });
+      }
+    }
+    return errs;
+  }
   async function delDir(destPath, opts = { include: [], exclude: [] }) {
     if (!conn) return noConnectionResponse;
     opts = testFnName in opts ? opts : processOpts(opts);
     destPath = destPath.replace(/\/$/, "") || "/";
-    let absDestPath = path.join(remoteBasePath, destPath);
-    let destStat = await retObj.exists(destPath);
-    if (destStat.err) {
-      logger({
-        method: "del",
-        res: { dest: destPath, res: res.res },
-        err: destStat.err,
-      });
-      return destStat;
-    }
-    if (destStat.res != "d") {
-      logger({
-        method: "del",
-        res: { dest: destPath, res: res.res },
-        err: `${absDestPath} is not a directory.`,
-      });
-      return { err: `${absDestPath} is not a directory.` };
-    }
-    let res = await retObj.list(destPath);
-    if (res.err) {
-      logger({
-        method: "del",
-        res: { dest: destPath, res: res.res },
-        err: res.err,
-      });
-      return res;
-    }
-    let destFiles = res.res;
-    let dirChild = [];
-    for (let i = 0; i < destFiles.length; i++) {
-      let childDest = path.join(destPath, destFiles[i].name);
-      if (destFiles[i].type == "-") {
-        let delStat = await retObj.del(childDest, opts);
-        if (delStat.err) return delStat;
-      } else {
-        dirChild.push(childDest);
-      }
-    }
-    for (let i = 0; i < dirChild.length; i++) {
-      let delStat = await delDir(dirChild[i], opts);
-      if (delStat.err) return delStat;
-    }
-    if (!opts[testFnName](absDestPath)) {
-      logger({
-        method: "del",
-        res: { dest: destPath, res: `skip del ${absDestPath} .` },
-        err: null,
-      });
-      return { res: `skip del ${absDestPath} .`, err: null };
-    }
-    res = await new Promise((resolve) => {
+    let stat = await remoteListRecursive(destPath, opts);
+    if (stat.err) return stat;
+    let err = (await doDelDir(stat.res)).filter((v) => v).join("/n");
+    if (err) return { err };
+    let res = await new Promise((resolve) => {
       conn.raw("rmd", absDestPath, (e) => {
         if (e) return resolve({ err: e.message });
         resolve({ err: null });
@@ -114,7 +184,85 @@ const FTP = function () {
       res: { dest: destPath, res: res.res },
       err: res.err,
     });
+    return { err: null };
+    // maybe some child exists by include/exclude , so report no error
     return res;
+  }
+  async function mkDirAbs(absDest) {
+    return await new Promise((resolve) => {
+      conn.raw("cwd", absDest, async (e) => {
+        if (e) {
+          let paths = absDest.split("/"),
+            idx = paths.length - 1,
+            isOk = false;
+          while (idx > 0 && !isOk) {
+            let partPath = paths.slice(0, idx).join("/") || "/";
+
+            let partExists = await this.exists(
+              path.relative(remoteBasePath, partPath)
+            );
+            if (partExists.err) return resolve(partExists);
+            if (partExists.res === "d") isOk = true;
+            else idx--;
+          }
+          if (!isOk)
+            return resolve({
+              err: `Can not create directory ${absDest} .`,
+            });
+          while (idx < paths.length) {
+            let partPath = paths.slice(0, ++idx).join("/") || "/";
+            let partCreate = await new Promise((resolve) => {
+              conn.raw("mkd", partPath, (e) => {
+                if (e) {
+                  return resolve({ err: e.message });
+                }
+                resolve({ err: null });
+              });
+            });
+            if (partCreate.err) return resolve(partCreate);
+          }
+          resolve({ err: null });
+        } else {
+          resolve({ err: null });
+        }
+      });
+    });
+  }
+  async function doPutDir(absSrcPath, absDestPath, files) {
+    let errs = [];
+    let res = await mkDirAbs(absDestPath);
+    if (res.err) return [res.err];
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].type == "-") {
+        let res = await new Promise((resolve) => {
+          let srcDat = fs.readFileSync(files[i].url);
+          conn.put(
+            srcDat,
+            path.join(absDestPath, path.relative(absSrcPath, files[i].url)),
+            (e) => {
+              if (e) return resolve({ err: e.message });
+              return resolve({ err: null });
+            }
+          );
+        });
+        errs.push(res.err);
+        logger({
+          method: "put",
+          res: { src, dest, res: res.res, opts },
+          err: res.err,
+        });
+      } else {
+        errs = [
+          ...errs,
+          ...(await doPutDir(
+            files[i].url,
+            path.join(absDestPath, path.relative(absSrcPath, files[i].url)),
+            files[i].child
+          )),
+        ];
+      }
+    }
+    return errs;
   }
   async function putDir(
     srcPath,
@@ -127,34 +275,6 @@ const FTP = function () {
     destPath = destPath.replace(/\/$/, "") || "/";
     let absSrcPath = path.join(localBasePath, srcPath);
     let absDestPath = path.join(remoteBasePath, destPath);
-    if (!fs.existsSync(absSrcPath)) {
-      logger({
-        method: "put",
-        res: { src: srcPath, dest: destPath },
-        err: `No source directory ${absSrcPath} .`,
-      });
-      return { err: `No source directory ${absSrcPath} .` };
-    }
-    if (!fs.lstatSync(absSrcPath).isDirectory()) {
-      logger({
-        method: "put",
-        res: { src: srcPath, dest: destPath },
-        err: `${absSrcPath} is not a directory.`,
-      });
-      return { err: `${absSrcPath} is not a directory.` };
-    }
-    if (!opts[testFnName](absSrcPath)) {
-      logger({
-        method: "put",
-        res: {
-          src: srcPath,
-          dest: destPath,
-          res: `skip put ${absSrcPath} .`,
-        },
-        err: null,
-      });
-      return { res: `skip put ${absSrcPath} .`, err: null };
-    }
     let destStat = await retObj.exists(destPath);
     if (destStat.err) {
       logger({
@@ -164,54 +284,89 @@ const FTP = function () {
       });
       return destStat;
     }
-    if (destStat.res == "-") {
-      logger({
-        method: "put",
-        res: { src: srcPath, dest: destPath },
-        err: `${absDestPath} is not a directory.`,
-      });
-      return { err: `${absDestPath} is not a directory.` };
-    }
-    let mkDirStat = await retObj.mkDir(destPath);
-    if (mkDirStat.err) {
-      logger({
-        method: "put",
-        res: { src: srcPath, dest: destPath },
-        err: mkDirStat.err,
-      });
-      return mkDirStat;
-    }
-    let srcFiles = fs.readdirSync(absSrcPath),
-      dirChild = [];
-    for (let i = 0; i < srcFiles.length; i++) {
-      let childSrc = path.join(srcPath, srcFiles[i]),
-        childAbsSrc = path.join(localBasePath, childSrc),
-        childDest = path.join(destPath, srcFiles[i]),
-        childStat = fs.lstatSync(childAbsSrc);
-      if (childStat.isDirectory())
-        dirChild.push({
-          src: childSrc,
-          dest: childDest,
+    let stat = await localListRecursive(srcPath, opts);
+    if (stat.err) return stat;
+    let err = (await doPutDir(absSrcPath, absDestPath, stat.res))
+      .filter((v) => v)
+      .join("/n");
+    if (err) return { err };
+  }
+  async function doGetDir(absRemotePath, absLocalPath, files) {
+    let errs = [];
+    let res = await new Promise((resolve) => {
+      if (!fs.existsSync(absLocalPath))
+        try {
+          fs.mkdirSync(absLocalPath, { recursive: true });
+        } catch (e) {
+          logger({
+            method: "get",
+            res: {
+              remote: path.relative(remoteBasePath, remotePath),
+              local: path.relative(localBasePath, localPath),
+            },
+            err: e.message,
+          });
+          resolve({ err: e.message });
+        }
+      if (!fs.lstatSync(absLocalPath).isDirectory()) {
+        logger({
+          method: "get",
+          res: {
+            remote: path.relative(remoteBasePath, remotePath),
+            local: path.relative(localBasePath, localPath),
+          },
+          err: null,
         });
-      if (childStat.isFile) {
-        let childPutStat = await retObj.put(childSrc, childDest, opts);
-        if (childPutStat.err) return childPutStat;
+        resolve({ err: `${absLocalPath} is not a directory.` });
+      }
+    });
+    if (res.err) return [res.err];
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].type == "-") {
+        let res = await new Promise((resolve) => {
+          let absLocal = path.join(
+            absLocalPath,
+            path.relative(absRemotePath, files[i].url)
+          );
+          conn.get(files[0].url, (e, socket) => {
+            if (e) {
+              return resolve({ err: e.message });
+            }
+            try {
+              fs.mkdirSync(path.dirname(absLocal), { recursive: true });
+            } catch (err) {
+              return resolve({ err: err.message });
+            }
+
+            const writeStream = fs.createWriteStream(absLocal);
+            writeStream.on("error", (err) => {
+              socket.destroy();
+              return resolve({ err: err.message });
+            });
+            socket.on("close", (err) => {
+              if (err) {
+                logger({
+                  method: "get",
+                  res: { absRemotePath, absLocalPath, opts },
+                  err: e.message,
+                });
+                return resolve({ err: err.message });
+              }
+              return resolve({ err: null });
+            });
+            socket.pipe(writeStream);
+          });
+        });
+        errs.push(res.err);
+        logger({
+          method: "get",
+          res: { absRemotePath, absLocalPath, opts },
+          err: res.err,
+        });
+      } else {
       }
     }
-    for (let i = 0; i < dirChild.length; i++) {
-      let childDirPutStat = await putDir(
-        dirChild[i].src,
-        dirChild[i].dest,
-        opts
-      );
-      if (childDirPutStat.err) return childDirPutStat;
-    }
-    logger({
-      method: "put",
-      res: { src: srcPath, dest: destPath },
-      err: null,
-    });
-    return { err: null };
+    return errs;
   }
   async function getDir(
     remotePath,
@@ -224,69 +379,12 @@ const FTP = function () {
     remotePath = remotePath.replace(/\/$/, "") || "/";
     let absLocalPath = path.join(localBasePath, localPath),
       absRemotePath = path.join(remoteBasePath, remotePath);
-    if (!opts[testFnName](absRemotePath)) {
-      logger({
-        method: "get",
-        res: {
-          remote: remotePath,
-          local: localPath,
-          res: `skip get ${absRemotePath} .`,
-        },
-        err: null,
-      });
-      return { res: `skip get ${absRemotePath} .`, err: null };
-    }
-    if (!fs.existsSync(absLocalPath))
-      try {
-        fs.mkdirSync(absLocalPath, { recursive: true });
-      } catch (e) {
-        logger({
-          method: "get",
-          res: { remote: remotePath, local: localPath },
-          err: e.message,
-        });
-        return { err: e.message };
-      }
-    if (!fs.lstatSync(absLocalPath).isDirectory()) {
-      logger({
-        method: "get",
-        res: { remote: remotePath, local: localPath },
-        err: null,
-      });
-      return { err: `${absLocalPath} is not a directory.` };
-    }
-    let res = await retObj.list(remotePath);
-    if (res.err) {
-      logger({
-        method: "get",
-        res: { remote: remotePath, local: localPath },
-        err: res.err,
-      });
-      return res;
-    }
-    let remoteFiles = res.res,
-      dirChild = [];
-
-    for (let i = 0; i < remoteFiles.length; i++) {
-      let childRemote = path.join(remotePath, remoteFiles[i].name),
-        childLocal = path.join(localPath, remoteFiles[i].name);
-      if (remoteFiles[i].type == "-") {
-        let getStat = await retObj.get(childRemote, childLocal, opts);
-        if (getStat.err) return getStat;
-      } else {
-        dirChild.push({ remote: childRemote, local: childLocal });
-      }
-    }
-    for (let i = 0; i < dirChild.length; i++) {
-      let getStat = await getDir(dirChild[i].remote, dirChild[i].local, opts);
-      if (getStat.err) return getStat;
-    }
-    logger({
-      method: "get",
-      res: { remote: remotePath, local: localPath },
-      err: null,
-    });
-    return { err: null };
+    let stat = await remoteListRecursive(remotePath, opts);
+    if (stat.err) return stat;
+    let err = (await doGetDir(absRemotePath, absLocalPath, stat.res))
+      .filter((v) => v)
+      .join("/n");
+    if (err) return { err };
   }
   const retObj = {
     async connect(cfg) {
@@ -321,6 +419,12 @@ const FTP = function () {
         return { err: null };
       }
       return res;
+    },
+    async listLocal(localPath, opts = { include: [], exclude: [] }) {
+      return await localListRecursive(localPath, opts);
+    },
+    async listRemote(remotePath, opts = { include: [], exclude: [] }) {
+      return await remoteListRecursive(remotePath, opts);
     },
     async chmod(
       dest,
@@ -489,8 +593,8 @@ const FTP = function () {
         });
       });
       logger({
-        method: "putx",
-        res: { src, dest, res: res.res, ex: opts.exclude },
+        method: "put",
+        res: { src, dest, res: res.res, opts },
         err: res.err,
       });
       return res;
@@ -590,44 +694,7 @@ const FTP = function () {
       if (!conn) return noConnectionResponse;
       destPath = destPath.replace(/\/$/, "") || "/";
       let absDest = path.join(remoteBasePath, destPath);
-      let res = await new Promise((resolve) => {
-        conn.raw("cwd", absDest, async (e) => {
-          if (e) {
-            let paths = absDest.split("/"),
-              idx = paths.length - 1,
-              isOk = false;
-            while (idx > 0 && !isOk) {
-              let partPath = paths.slice(0, idx).join("/") || "/";
-
-              let partExists = await this.exists(
-                path.relative(remoteBasePath, partPath)
-              );
-              if (partExists.err) return resolve(partExists);
-              if (partExists.res === "d") isOk = true;
-              else idx--;
-            }
-            if (!isOk)
-              return resolve({
-                err: `Can not create directory ${absDest} .`,
-              });
-            while (idx < paths.length) {
-              let partPath = paths.slice(0, ++idx).join("/") || "/";
-              let partCreate = await new Promise((resolve) => {
-                conn.raw("mkd", partPath, (e) => {
-                  if (e) {
-                    return resolve({ err: e.message });
-                  }
-                  resolve({ err: null });
-                });
-              });
-              if (partCreate.err) return resolve(partCreate);
-            }
-            resolve({ err: null });
-          } else {
-            resolve({ err: null });
-          }
-        });
-      });
+      let res = await mkDirAbs(absDest);
       logger({
         method: "mkDir",
         res: { destPath, res: res.res },
