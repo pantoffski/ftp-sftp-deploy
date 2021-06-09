@@ -332,7 +332,7 @@ const SFTP = function () {
     if (res.err) return [res.err];
     for (let i = 0; i < files.length; i++) {
       if (files[i].type == "-") {
-        let res = await new Promise((resolve) => {
+        let res = await new Promise(async (resolve) => {
           let absLocal = path.join(
             absLocalPath,
             path.relative(absRemotePath, files[i].url)
