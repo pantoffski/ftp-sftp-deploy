@@ -144,7 +144,7 @@ const FTP = function () {
         errs.push(res.err);
         logger({
           method: "del",
-          res: { dest, res: res.res },
+          res: { res: res.res },
           err: res.err,
         });
       } else {
@@ -158,7 +158,7 @@ const FTP = function () {
         // errs.push(res.err);
         logger({
           method: "del",
-          res: { dest: destPath, res: res.res },
+          res: { res: res.res },
           err: res.err,
         });
       }
