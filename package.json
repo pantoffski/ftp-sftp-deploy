@@ -1,6 +1,6 @@
 {
   "name": "ftp-sftp-deploy",
-  "version": "0.0.1a",
+  "version": "0.0.2",
   "description": "Deploy via ftp/sftp",
   "main": "index.js",
   "scripts": {
