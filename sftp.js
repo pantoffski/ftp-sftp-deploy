@@ -141,7 +141,7 @@ const SFTP = function () {
         childAbsLocal = path.join(localBasePath, childLocal),
         childStat = fs.lstatSync(childAbsLocal);
       if (childStat.isDirectory()) dirChild.push(childLocal);
-      if (childStat.isFile) {
+      if (childStat.isFile()) {
         console.warn("test ", childAbsLocal);
         if (opts[testFnName](childAbsLocal))
           res.push({ type: "-", url: childAbsLocal });

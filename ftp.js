@@ -61,16 +61,16 @@ const FTP = function () {
     remotePath = remotePath.replace(/\/$/, "") || "/";
     opts = testFnName in opts ? opts : processOpts(opts);
     let res = [],
-      absRemotePath = path.join(localBasePath, remotePath);
+      absRemotePath = path.join(remoteBasePath, remotePath);
 
-    let tmp = await retObj.list(remotePath);
+    let tmp = await retObj.list(absRemotePath);
     if (tmp.err) return tmp;
 
     let remoteFiles = tmp.res,
       dirChild = [];
     for (let i = 0; i < remoteFiles.length; i++) {
       let childRemote = path.join(remotePath, remoteFiles[i].name),
-        childAbsRemote = path.join(localBasePath, childRemote);
+        childAbsRemote = path.join(remoteBasePath, childRemote);
       if (remoteFiles[i].type == "-") {
         if (opts[testFnName](childAbsRemote))
           res.push({ type: "-", url: childAbsRemote });
@@ -83,7 +83,7 @@ const FTP = function () {
       if (!childDirRes.err && childDirRes.res.length) {
         res.push({
           type: "d",
-          url: path.join(localBasePath, dirChild[i]),
+          url: path.join(remoteBasePath, dirChild[i]),
           child: childDirRes.res,
         });
       }
@@ -113,8 +113,8 @@ const FTP = function () {
         childAbsLocal = path.join(localBasePath, childLocal),
         childStat = fs.lstatSync(childAbsLocal);
       if (childStat.isDirectory()) dirChild.push(childLocal);
-      if (childStat.isFile) {
-        console.warn("test ", childAbsLocal);
+      if (childStat.isFile()) {
+         console.warn("test ", childAbsLocal);
         if (opts[testFnName](childAbsLocal))
           res.push({ type: "-", url: childAbsLocal });
       }
@@ -170,9 +170,12 @@ const FTP = function () {
     opts = testFnName in opts ? opts : processOpts(opts);
     destPath = destPath.replace(/\/$/, "") || "/";
     let stat = await remoteListRecursive(destPath, opts);
+    
     if (stat.err) return stat;
     let err = (await doDelDir(stat.res)).filter((v) => v).join("/n");
     if (err) return { err };
+
+    let absDestPath = path.join(remoteBasePath, destPath);
     let res = await new Promise((resolve) => {
       conn.raw("rmd", absDestPath, (e) => {
         if (e) return resolve({ err: e.message });
@@ -198,7 +201,7 @@ const FTP = function () {
           while (idx > 0 && !isOk) {
             let partPath = paths.slice(0, idx).join("/") || "/";
 
-            let partExists = await this.exists(
+            let partExists = await retObj.exists(
               path.relative(remoteBasePath, partPath)
             );
             if (partExists.err) return resolve(partExists);
@@ -235,6 +238,7 @@ const FTP = function () {
     for (let i = 0; i < files.length; i++) {
       if (files[i].type == "-") {
         let res = await new Promise((resolve) => {
+          
           let srcDat = fs.readFileSync(files[i].url);
           conn.put(
             srcDat,
@@ -248,7 +252,7 @@ const FTP = function () {
         errs.push(res.err);
         logger({
           method: "put",
-          res: { src, dest, res: res.res, opts },
+          res: {  res: res.res },
           err: res.err,
         });
       } else {
@@ -290,6 +294,8 @@ const FTP = function () {
       .filter((v) => v)
       .join("/n");
     if (err) return { err };
+    console.log('done putDir');
+    
   }
   async function doGetDir(absRemotePath, absLocalPath, files) {
     let errs = [];
@@ -559,7 +565,7 @@ const FTP = function () {
         logger({
           method: "put",
           res: { src, dest },
-          err: `No source file or directory ${absSrc} .`,
+          err: `No source file or directory ${absSrc} ..`,
         });
         return { err: `No source file or directory ${absSrc} .` };
       }
