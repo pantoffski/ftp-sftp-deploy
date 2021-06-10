@@ -248,7 +248,7 @@ const FTP = function () {
         errs.push(res.err);
         logger({
           method: "put",
-          res: { dest, res: res.res, opts },
+          res: { res: res.res, opts },
           err: res.err,
         });
       } else {
