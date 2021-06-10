@@ -113,7 +113,7 @@ const FTP = function () {
         childAbsLocal = path.join(localBasePath, childLocal),
         childStat = fs.lstatSync(childAbsLocal);
       if (childStat.isDirectory()) dirChild.push(childLocal);
-      if (childStat.isFile) {
+      if (childStat.isFile()) {
         console.warn("test ", childAbsLocal);
         if (opts[testFnName](childAbsLocal))
           res.push({ type: "-", url: childAbsLocal });
@@ -235,6 +235,8 @@ const FTP = function () {
     for (let i = 0; i < files.length; i++) {
       if (files[i].type == "-") {
         let res = await new Promise((resolve) => {
+          console.log("read file sync", files[i].url, files[i].type);
+
           let srcDat = fs.readFileSync(files[i].url);
           conn.put(
             srcDat,
@@ -248,7 +250,7 @@ const FTP = function () {
         errs.push(res.err);
         logger({
           method: "put",
-          res: { res: res.res, opts },
+          res: { res: res.res },
           err: res.err,
         });
       } else {
@@ -285,6 +287,8 @@ const FTP = function () {
       return destStat;
     }
     let stat = await localListRecursive(srcPath, opts);
+    console.log(JSON.stringify(stat));
+
     if (stat.err) return stat;
     let err = (await doPutDir(absSrcPath, absDestPath, stat.res))
       .filter((v) => v)
