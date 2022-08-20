@@ -174,7 +174,7 @@ const FTP = function () {
     let err = (await doDelDir(stat.res)).filter((v) => v).join("/n");
     if (err) return { err };
     let res = await new Promise((resolve) => {
-      conn.raw("rmd", absDestPath, (e) => {
+      conn.raw("rmd", destPath, (e) => {
         if (e) return resolve({ err: e.message });
         resolve({ err: null });
       });
@@ -198,7 +198,7 @@ const FTP = function () {
           while (idx > 0 && !isOk) {
             let partPath = paths.slice(0, idx).join("/") || "/";
 
-            let partExists = await this.exists(
+            let partExists = await retObj.exists(
               path.relative(remoteBasePath, partPath)
             );
             if (partExists.err) return resolve(partExists);
@@ -440,7 +440,7 @@ const FTP = function () {
       opts = testFnName in opts ? opts : processOpts(opts);
       dest = dest.replace(/\/$/, "") || "/";
       let absDest = path.join(remoteBasePath, dest);
-      let destStat = await this.exists(dest);
+      let destStat = await retObj.exists(dest);
 
       if (destStat.err || !destStat.res) {
         logger({
@@ -520,7 +520,7 @@ const FTP = function () {
       opts = testFnName in opts ? opts : processOpts(opts);
       dest = dest.replace(/\/$/, "") || "/";
       let absDest = path.join(remoteBasePath, dest);
-      let destStat = await this.exists(dest);
+      let destStat = await retObj.exists(dest);
       if (destStat.err || !destStat.res) {
         logger({
           method: "del",
@@ -610,7 +610,7 @@ const FTP = function () {
       local = local.replace(/\/$/, "") || "/";
       let absRemote = path.join(remoteBasePath, remote);
       let absLocal = path.join(localBasePath, local);
-      let destStat = await this.exists(remote);
+      let destStat = await retObj.exists(remote);
       if (destStat.err || !destStat.res) {
         logger({
           method: "get",
@@ -670,7 +670,7 @@ const FTP = function () {
       destSrc = destSrc.replace(/\/$/, "") || "/";
       let absDestSrc = path.join(remoteBasePath, destSrc);
       let absDest = path.join(remoteBasePath, dest);
-      let destStat = await this.exists(destSrc);
+      let destStat = await retObj.exists(destSrc);
       if (destStat.err || !destStat.res) {
         logger({
           method: "rename",
