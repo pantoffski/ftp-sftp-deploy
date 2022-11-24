@@ -387,7 +387,7 @@ const SFTP = function () {
           logger({
             method: "connect",
             res: { host: cfg.host },
-            err: e.message,
+            err: null,
           });
           return { err: null, res: conn };
         })
