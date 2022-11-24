@@ -760,7 +760,7 @@ const SFTP = function () {
         logger({
           method: "exists",
           res: { dest, res: r },
-          err: e.message,
+          err: null,
         });
         return { err: null, res: r };
       } catch (e) {
