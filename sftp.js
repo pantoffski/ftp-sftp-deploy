@@ -238,15 +238,15 @@ const SFTP = function () {
           .catch((e) => {
             return { err: e.message };
           });
-        if (!res.err && res.res == "d") return { err: null };
+        if (!r.err && r.res == "d") return { err: null };
         return { err: e.message };
       });
     if (res.err) return [res.err];
     for (let i = 0; i < files.length; i++) {
       if (files[i].type == "-") {
-        let d = fs.createReadStream(absSrc);
+        let d = fs.createReadStream(absSrcPath);
         let res = await conn
-          .put(d, absDest)
+          .put(d, absDestPath)
           .then((r) => {
             return { err: null };
           })
@@ -257,7 +257,7 @@ const SFTP = function () {
         errs.push(res.err);
         logger({
           method: "put",
-          res: { src, dest, res: res.res, opts },
+          res: { src:absSrcPath, dest:absDestPath, res: res.res },
           err: res.err,
         });
       } else {
