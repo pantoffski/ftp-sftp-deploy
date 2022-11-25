@@ -13,5 +13,4 @@ yarn-error.log*
 *.sln
 *.sw*
 demo.js
-a.txt
-/playground
+/old

@@ -4,7 +4,7 @@
   "description": "Deploy via ftp/sftp",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon demo.js",
+    "serve": "nodemon demo.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
